@@ -1,0 +1,5 @@
+{
+  "name": "RetroFocus TUI",
+  "description": "A retro-styled Text User Interface (TUI) application combining a task manager and Pomodoro timer with Markdown export capabilities.",
+  "requestFramePermissions": []
+}
