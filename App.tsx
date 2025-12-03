@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { DEFAULT_SETTINGS, ASCII_HEADER } from './constants';
 import { TimerMode, Task, DailyStats, Database, DayData } from './types';
@@ -8,41 +7,65 @@ import { TimerDisplay } from './components/TimerDisplay';
 import { TuiBox } from './components/TuiBox';
 import { HistoryList } from './components/HistoryList';
 
+// Helper for safe ID generation
+const generateId = () => {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return Date.now().toString(36) + Math.random().toString(36).substring(2);
+};
+
 const App: React.FC = () => {
   const todayDate = getTodayDateString();
 
   // --- Database State ---
   const [db, setDb] = useState<Database>(() => {
-    const saved = localStorage.getItem('retrofocus_db');
-    let parsedDb: Database = saved ? JSON.parse(saved) : {};
-    
-    // Legacy migration check (if coming from v1)
-    if (Object.keys(parsedDb).length === 0) {
-      const oldTasks = localStorage.getItem('tui-pomodoro-tasks');
-      const oldStats = localStorage.getItem('tui-pomodoro-stats');
-      if (oldTasks || oldStats) {
-        // Try to guess date from stats or default to today
-        const statsObj = oldStats ? JSON.parse(oldStats) : { date: todayDate, pomodorosCompleted: 0, totalTimeMinutes: 0 };
-        const tasksObj = oldTasks ? JSON.parse(oldTasks) : [];
-        const dateKey = statsObj.date || todayDate;
-        parsedDb[dateKey] = {
-          date: dateKey,
-          tasks: tasksObj,
-          stats: statsObj
+    try {
+      const saved = localStorage.getItem('retrofocus_db');
+      let parsedDb: Database = saved ? JSON.parse(saved) : {};
+      
+      // Legacy migration check (if coming from v1)
+      if (Object.keys(parsedDb).length === 0) {
+        const oldTasks = localStorage.getItem('tui-pomodoro-tasks');
+        const oldStats = localStorage.getItem('tui-pomodoro-stats');
+        if (oldTasks || oldStats) {
+          try {
+            // Try to guess date from stats or default to today
+            const statsObj = oldStats ? JSON.parse(oldStats) : { date: todayDate, pomodorosCompleted: 0, totalTimeMinutes: 0 };
+            const tasksObj = oldTasks ? JSON.parse(oldTasks) : [];
+            const dateKey = statsObj.date || todayDate;
+            parsedDb[dateKey] = {
+              date: dateKey,
+              tasks: tasksObj,
+              stats: statsObj
+            };
+          } catch (e) {
+            console.warn("Failed to migrate legacy data", e);
+          }
+        }
+      }
+
+      // Ensure today exists
+      if (!parsedDb[todayDate]) {
+        parsedDb[todayDate] = {
+          date: todayDate,
+          tasks: [],
+          stats: { date: todayDate, pomodorosCompleted: 0, totalTimeMinutes: 0 }
         };
       }
-    }
-
-    // Ensure today exists
-    if (!parsedDb[todayDate]) {
-      parsedDb[todayDate] = {
-        date: todayDate,
-        tasks: [],
-        stats: { date: todayDate, pomodorosCompleted: 0, totalTimeMinutes: 0 }
+      
+      return parsedDb;
+    } catch (error) {
+      console.error("Critical error loading database:", error);
+      // Return a safe default state to prevent white/black screen of death
+      return {
+        [todayDate]: {
+          date: todayDate,
+          tasks: [],
+          stats: { date: todayDate, pomodorosCompleted: 0, totalTimeMinutes: 0 }
+        }
       };
     }
-    
-    return parsedDb;
   });
 
   const [viewDate, setViewDate] = useState<string>(todayDate);
@@ -56,7 +79,11 @@ const App: React.FC = () => {
 
   // --- Persistence ---
   useEffect(() => {
-    localStorage.setItem('retrofocus_db', JSON.stringify(db));
+    try {
+      localStorage.setItem('retrofocus_db', JSON.stringify(db));
+    } catch (e) {
+      console.error("Failed to save to localStorage", e);
+    }
   }, [db]);
 
   // --- Helpers ---
@@ -145,7 +172,7 @@ const App: React.FC = () => {
 
   const handleAddTask = (text: string) => {
     const newTask: Task = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       text,
       completed: false,
       pomodoros: 0
@@ -193,16 +220,11 @@ const App: React.FC = () => {
   };
 
   const handleMigrateTask = (task: Task) => {
-    // 1. Remove from current view (history)
-    // 2. Add to today
-    // 3. Switch view to today? Maybe not, stay in history to migrate more.
-    
     // Create new task copy for today
     const migratedTask: Task = {
       ...task,
-      id: crypto.randomUUID(), // New ID to prevent conflicts
-      pomodoros: 0 // Reset pomodoros for the new day? Or keep? Usually reset for daily tracking.
-      // Let's reset pomodoros as it's a "new day" effort, but keep text.
+      id: generateId(), // New ID to prevent conflicts
+      pomodoros: 0 // Reset pomodoros for the new day
     };
 
     setDb(prev => {
