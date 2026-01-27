@@ -16,6 +16,7 @@ export interface DayData {
   date: string;
   tasks: Task[];
   stats: DailyStats;
+  _pbDayId?: string; // PocketBase day record ID for syncing
 }
 
 export type Database = Record<string, DayData>;

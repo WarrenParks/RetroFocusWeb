@@ -15,7 +15,10 @@ interface TimerDisplayProps {
   onReset: () => void;
   onSkip: () => void;
   onModeChange: (mode: TimerMode) => void;
+  isFocusMode?: boolean;
+  onToggleFocusMode?: () => void;
 }
+
 
 export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   timeLeft,
@@ -27,9 +30,11 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   onReset,
   onSkip,
   onModeChange,
+  isFocusMode,
+  onToggleFocusMode,
 }) => {
   const progress = Math.min(100, Math.max(0, ((totalDuration - timeLeft) / totalDuration) * 100));
-  
+
   // Blinking cursor effect for the timer
   const [cursorVisible, setCursorVisible] = useState(true);
   useEffect(() => {
@@ -38,8 +43,20 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
   }, []);
 
   return (
-    <TuiBox title="POMODORO_CORE" className="flex flex-col items-center justify-center p-6 text-center" isActive={isActive}>
-      
+    <TuiBox title={isFocusMode ? "POMODORO_CORE // FOCUS_MODE" : "POMODORO_CORE"} className="flex flex-col items-center justify-center p-6 text-center h-full" isActive={isActive}>
+
+      {/* Manual Focus Toggle */}
+      {onToggleFocusMode && (
+        <div className="absolute top-4 right-4">
+          <button
+            onClick={onToggleFocusMode}
+            className="text-[10px] uppercase tracking-wider text-green-800 hover:text-green-500 border border-green-900 px-2 py-1"
+          >
+            [{isFocusMode ? 'MINIMIZE' : 'EXPAND'}]
+          </button>
+        </div>
+      )}
+
       {/* Active Task Display */}
       <div className="w-full mb-6 text-left border-b border-green-900 pb-2">
         <div className="text-xs text-green-700 mb-1">CURRENT_TARGET:</div>
@@ -58,11 +75,10 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
           <button
             key={m}
             onClick={() => onModeChange(m)}
-            className={`px-2 py-1 border ${
-              mode === m 
-                ? 'bg-green-500 text-black border-green-500 font-bold' 
+            className={`px-2 py-1 border ${mode === m
+                ? 'bg-green-500 text-black border-green-500 font-bold'
                 : 'border-green-900 text-green-800 hover:text-green-600 hover:border-green-700'
-            }`}
+              }`}
           >
             {MODE_LABELS[m]}
           </button>
@@ -75,7 +91,7 @@ export const TimerDisplay: React.FC<TimerDisplayProps> = ({
           {formatTime(timeLeft)}
         </div>
         {isActive && cursorVisible && (
-            <div className="absolute top-4 -right-8 w-4 h-20 bg-green-500 opacity-50"></div>
+          <div className="absolute top-4 -right-8 w-4 h-20 bg-green-500 opacity-50"></div>
         )}
       </div>
 

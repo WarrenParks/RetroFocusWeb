@@ -7,6 +7,7 @@ import { TimerDisplay } from './components/TimerDisplay';
 import { TuiBox } from './components/TuiBox';
 import { HistoryList } from './components/HistoryList';
 import { AuthModal } from './components/AuthModal';
+import { TimezoneModal } from './components/TimezoneModal';
 import { SyncStatus } from './components/SyncStatus';
 import { usePocketBase } from './hooks/usePocketBase';
 
@@ -19,6 +20,11 @@ const generateId = () => {
 };
 
 const App: React.FC = () => {
+  // Force re-render on save
+  const handleTimezoneSave = () => {
+    window.location.reload();
+  };
+
   const todayDate = getTodayDateString();
 
   // --- PocketBase Hook ---
@@ -46,7 +52,7 @@ const App: React.FC = () => {
     try {
       const saved = localStorage.getItem('retrofocus_db');
       let parsedDb: Database = saved ? JSON.parse(saved) : {};
-      
+
       if (!parsedDb[todayDate]) {
         parsedDb[todayDate] = {
           date: todayDate,
@@ -54,7 +60,7 @@ const App: React.FC = () => {
           stats: { date: todayDate, pomodorosCompleted: 0, totalTimeMinutes: 0 }
         };
       }
-      
+
       return parsedDb;
     } catch (error) {
       console.error("Critical error loading database:", error);
@@ -70,16 +76,18 @@ const App: React.FC = () => {
 
   // Use synced DB when authenticated, otherwise use local
   const db = isAuthenticated ? syncedDb : localDb;
-  const setDb = isAuthenticated ? () => {} : setLocalDb; // Only allow local updates when not authenticated
+  const setDb = isAuthenticated ? () => { } : setLocalDb; // Only allow local updates when not authenticated
 
   const [viewDate, setViewDate] = useState<string>(todayDate);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showTimezoneModal, setShowTimezoneModal] = useState(false);
 
   const [mode, setMode] = useState<TimerMode>(TimerMode.WORK);
   const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.workDuration);
   const [isActive, setIsActive] = useState(false);
-  
+
+  const [isFocusMode, setIsFocusMode] = useState(false);
   const lastTickRef = useRef<number | null>(null);
 
   // --- Persistence (only for local/offline mode) ---
@@ -95,10 +103,10 @@ const App: React.FC = () => {
 
   // --- Helpers ---
   const isViewingToday = viewDate === todayDate;
-  const currentDayData = db[viewDate] || { 
-    date: viewDate, 
-    tasks: [], 
-    stats: { date: viewDate, pomodorosCompleted: 0, totalTimeMinutes: 0 } 
+  const currentDayData = db[viewDate] || {
+    date: viewDate,
+    tasks: [],
+    stats: { date: viewDate, pomodorosCompleted: 0, totalTimeMinutes: 0 }
   };
   const todayData = db[todayDate] || {
     date: todayDate,
@@ -109,6 +117,7 @@ const App: React.FC = () => {
   // --- Timer Logic ---
   const handleTimerComplete = async () => {
     setIsActive(false);
+    setIsFocusMode(false);
 
     if (mode === TimerMode.WORK) {
       if (isAuthenticated) {
@@ -132,15 +141,15 @@ const App: React.FC = () => {
             pomodorosCompleted: today.stats.pomodorosCompleted + 1,
             totalTimeMinutes: today.stats.totalTimeMinutes + (DEFAULT_SETTINGS.workDuration / 60)
           };
-          
+
           let newTasks = [...today.tasks];
           if (activeTaskId) {
             const taskIndex = newTasks.findIndex(t => t.id === activeTaskId);
             if (taskIndex >= 0) {
-               newTasks[taskIndex] = {
-                 ...newTasks[taskIndex],
-                 pomodoros: newTasks[taskIndex].pomodoros + 1
-               };
+              newTasks[taskIndex] = {
+                ...newTasks[taskIndex],
+                pomodoros: newTasks[taskIndex].pomodoros + 1
+              };
             }
           }
 
@@ -171,7 +180,7 @@ const App: React.FC = () => {
       interval = window.setInterval(() => {
         const now = Date.now();
         const delta = Math.floor((now - (lastTickRef.current || now)) / 1000);
-        
+
         if (delta >= 1) {
           setTimeLeft(prev => {
             const next = prev - 1;
@@ -183,7 +192,7 @@ const App: React.FC = () => {
           });
           lastTickRef.current = now;
         }
-      }, 100); 
+      }, 100);
     } else if (timeLeft === 0 && isActive) {
       handleTimerComplete();
     }
@@ -228,7 +237,7 @@ const App: React.FC = () => {
         ...prev,
         [viewDate]: {
           ...prev[viewDate],
-          tasks: prev[viewDate].tasks.map(t => 
+          tasks: prev[viewDate].tasks.map(t =>
             t.id === id ? { ...t, completed: !t.completed } : t
           )
         }
@@ -270,7 +279,7 @@ const App: React.FC = () => {
       setLocalDb(prev => {
         const oldDay = prev[viewDate];
         const oldTasks = oldDay.tasks.filter(t => t.id !== task.id);
-        
+
         const today = prev[todayDate];
         const todayTasks = [...today.tasks, migratedTask];
 
@@ -308,7 +317,15 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen p-4 md:p-8 flex flex-col max-w-6xl mx-auto">
-      
+
+      {/* Timezone Modal */}
+      {showTimezoneModal && (
+        <TimezoneModal
+          onClose={() => setShowTimezoneModal(false)}
+          onSave={handleTimezoneSave}
+        />
+      )}
+
       {/* Auth Modal */}
       {showAuthModal && (
         <AuthModal
@@ -319,119 +336,143 @@ const App: React.FC = () => {
           isLoading={authLoading}
         />
       )}
-      
-      {/* Header */}
-      <header className="mb-6 md:mb-8 text-center select-none">
-        <div className="hidden md:block">
-          <pre className="text-xs md:text-sm lg:text-base leading-none text-green-600 font-bold opacity-75">
-            {ASCII_HEADER}
-          </pre>
-        </div>
-        <div className="mt-2 text-green-800 text-sm tracking-[0.5em] flex justify-between items-center px-4 border-b-2 border-green-900 pb-2">
-           <span className="hidden md:inline">SYSTEM_READY // V2.0.0</span>
-           <span className="text-green-500 font-bold">DATE_LOADED: {viewDate}</span>
-           <SyncStatus
-             isAuthenticated={isAuthenticated}
-             isSyncing={isSyncing}
-             userEmail={user?.email}
-             onLoginClick={() => setShowAuthModal(true)}
-             onLogout={logout}
-           />
-        </div>
-        
-        {/* Mobile Header Title */}
-        <h1 className="md:hidden text-4xl font-bold tracking-widest text-green-500 mt-4">RETROFOCUS</h1>
-      </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 flex-1">
-        
+      {/* Header */}
+      {!isFocusMode && (
+        <header className="mb-6 md:mb-8 text-center select-none">
+          <div className="hidden md:block">
+            <pre className="text-xs md:text-sm lg:text-base leading-none text-green-600 font-bold opacity-75">
+              {ASCII_HEADER}
+            </pre>
+          </div>
+          <div className="mt-2 text-green-800 text-sm tracking-[0.5em] flex justify-between items-center px-4 border-b-2 border-green-900 pb-2">
+            <span className="hidden md:inline">SYSTEM_READY // V2.0.0</span>
+            <span className="text-green-500 font-bold">DATE_LOADED: {viewDate}</span>
+            <SyncStatus
+              isAuthenticated={isAuthenticated}
+              isSyncing={isSyncing}
+              userEmail={user?.email}
+              onLoginClick={() => setShowAuthModal(true)}
+              onLogout={logout}
+            />
+          </div>
+
+          {/* Mobile Header Title */}
+          <h1 className="md:hidden text-4xl font-bold tracking-widest text-green-500 mt-4">RETROFOCUS</h1>
+        </header>
+      )}
+
+      <div className={`grid grid-cols-1 ${isFocusMode ? 'grid-cols-1' : 'lg:grid-cols-12'} gap-8 flex-1 transition-all duration-500`}>
+
         {/* Left Column: History & Stats (3 cols) */}
-        <div className="lg:col-span-3 flex flex-col space-y-4 order-2 lg:order-1">
-           <HistoryList 
-             dates={Object.keys(db)}
-             currentDate={todayDate}
-             viewDate={viewDate}
-             onSelectDate={setViewDate}
-           />
-           
-           <TuiBox title="METRICS_LOG" className="p-4">
-             <div className="space-y-4">
-               <div>
+        {!isFocusMode && (
+          <div className="lg:col-span-3 flex flex-col space-y-4 order-2 lg:order-1">
+            <HistoryList
+              dates={Object.keys(db)}
+              currentDate={todayDate}
+              viewDate={viewDate}
+              onSelectDate={setViewDate}
+            />
+
+            <TuiBox title="METRICS_LOG" className="p-4">
+              <div className="space-y-4">
+                <div>
                   <div className="text-xs text-green-700 mb-1">DATE</div>
                   <div className="text-xl text-green-400 font-bold">{currentDayData.stats.date}</div>
-               </div>
-               <div className="grid grid-cols-2 gap-2">
-                 <div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
                     <div className="text-xs text-green-700">POMODOROS</div>
                     <div className="text-2xl text-green-400">{currentDayData.stats.pomodorosCompleted}</div>
-                 </div>
-                 <div>
+                  </div>
+                  <div>
                     <div className="text-xs text-green-700">MINUTES</div>
                     <div className="text-2xl text-green-400">{Math.round(currentDayData.stats.totalTimeMinutes)}</div>
-                 </div>
-               </div>
-             </div>
-           </TuiBox>
-        </div>
+                  </div>
+                </div>
+              </div>
+            </TuiBox>
+          </div>
+        )}
 
         {/* Middle Column: Timer (5 cols) */}
-        <div className="lg:col-span-5 flex flex-col order-1 lg:order-2">
-          <TimerDisplay 
+        <div className={`${isFocusMode ? 'col-span-1 border-4 border-green-500 rounded-lg p-12 shadow-[0_0_50px_rgba(0,255,0,0.1)]' : 'lg:col-span-5'} flex flex-col order-1 lg:order-2 transition-all duration-500 justify-center h-full`}>
+          <TimerDisplay
             timeLeft={timeLeft}
             isActive={isActive}
             mode={mode}
             totalDuration={
               mode === TimerMode.WORK ? DEFAULT_SETTINGS.workDuration :
-              mode === TimerMode.SHORT_BREAK ? DEFAULT_SETTINGS.shortBreakDuration :
-              DEFAULT_SETTINGS.longBreakDuration
+                mode === TimerMode.SHORT_BREAK ? DEFAULT_SETTINGS.shortBreakDuration :
+                  DEFAULT_SETTINGS.longBreakDuration
             }
             activeTaskText={activeTask?.text}
-            onToggleTimer={() => setIsActive(!isActive)}
+            onToggleTimer={() => {
+              const nextState = !isActive;
+              setIsActive(nextState);
+              // Auto-enter focus mode on start, but don't auto-exit on pause
+              if (nextState) setIsFocusMode(true);
+            }}
             onReset={() => {
               setIsActive(false);
               handleModeChange(mode);
+              setIsFocusMode(false);
             }}
             onSkip={() => handleTimerComplete()}
             onModeChange={handleModeChange}
+            isFocusMode={isFocusMode}
+            onToggleFocusMode={() => setIsFocusMode(!isFocusMode)}
           />
-          
-          {!isViewingToday && (
-             <div className="mt-4 border border-yellow-800 bg-yellow-900/10 p-2 text-center text-yellow-600 animate-pulse text-sm">
-               WARNING: VIEWING HISTORICAL LOG. <br/>
-               TIMER UPDATES TODAY'S ({todayDate}) STATS.
-             </div>
+
+          {!isViewingToday && !isFocusMode && (
+            <div className="mt-4 border border-yellow-800 bg-yellow-900/10 p-2 text-center text-yellow-600 animate-pulse text-sm">
+              WARNING: VIEWING HISTORICAL LOG. <br />
+              TIMER UPDATES TODAY'S ({todayDate}) STATS.
+            </div>
           )}
         </div>
 
         {/* Right Column: Tasks (4 cols) */}
-        <div className="lg:col-span-4 flex flex-col h-full order-3">
-           <TaskList 
-             tasks={currentDayData.tasks}
-             activeTaskId={isViewingToday ? activeTaskId : null}
-             isHistory={!isViewingToday}
-             onAddTask={handleAddTask}
-             onToggleTask={handleToggleTask}
-             onDeleteTask={handleDeleteTask}
-             onSelectTask={handleSelectTask}
-             onMigrateTask={handleMigrateTask}
-           />
-           
-           <div className="mt-4 flex justify-end">
-             <button
-               onClick={handleExport}
-               className="group w-full lg:w-auto relative px-6 py-2 border-2 border-green-800 hover:border-green-400 transition-colors bg-black"
-             >
+        {!isFocusMode && (
+          <div className="lg:col-span-4 flex flex-col h-full order-3">
+            <TaskList
+              tasks={currentDayData.tasks}
+              activeTaskId={isViewingToday ? activeTaskId : null}
+              isHistory={!isViewingToday}
+              onAddTask={handleAddTask}
+              onToggleTask={handleToggleTask}
+              onDeleteTask={handleDeleteTask}
+              onSelectTask={handleSelectTask}
+              onMigrateTask={handleMigrateTask}
+            />
+
+            <div className="mt-4 flex justify-end">
+              <button
+                onClick={handleExport}
+                className="group w-full lg:w-auto relative px-6 py-2 border-2 border-green-800 hover:border-green-400 transition-colors bg-black"
+              >
                 <span className="text-green-600 group-hover:text-green-300 font-bold tracking-wider">
                   [ DOWNLOAD {viewDate}.md ]
                 </span>
-             </button>
-           </div>
-        </div>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
-      
-      <footer className="mt-12 text-center text-green-900 text-xs pb-4">
-        <p>RETROFOCUS TUI // {isAuthenticated ? 'POCKETBASE_SYNC' : 'LOCAL_STORAGE_DB'} // V2</p>
-      </footer>
+
+      {!isFocusMode && (
+        <footer className="mt-12 text-center text-green-900 text-xs pb-4">
+          <p>RETROFOCUS TUI // {isAuthenticated ? 'POCKETBASE_SYNC' : 'LOCAL_STORAGE_DB'} // V2</p>
+          <button
+            onClick={() => setShowTimezoneModal(true)}
+            className="mt-2 text-[10px] opacity-50 font-mono hover:text-green-500 hover:opacity-100 transition-all cursor-pointer text-left mx-auto block"
+          >
+            DEBUG: Browser Time: {new Date().toString()} <br />
+            App Date: {getTodayDateString()} <br />
+            [CLICK TO OVERRIDE TIMEZONE]
+          </button>
+        </footer>
+      )}
     </div>
   );
 };
