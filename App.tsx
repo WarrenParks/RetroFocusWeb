@@ -6,8 +6,11 @@ import { TaskList } from './components/TaskList';
 import { TimerDisplay } from './components/TimerDisplay';
 import { TuiBox } from './components/TuiBox';
 import { HistoryList } from './components/HistoryList';
+import { AuthModal } from './components/AuthModal';
+import { SyncStatus } from './components/SyncStatus';
+import { usePocketBase } from './hooks/usePocketBase';
 
-// Helper for safe ID generation
+// Helper for safe ID generation (used for offline mode)
 const generateId = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
@@ -18,34 +21,32 @@ const generateId = () => {
 const App: React.FC = () => {
   const todayDate = getTodayDateString();
 
-  // --- Database State ---
-  const [db, setDb] = useState<Database>(() => {
+  // --- PocketBase Hook ---
+  const {
+    isAuthenticated,
+    user,
+    isLoading: authLoading,
+    error: authError,
+    login,
+    register,
+    logout,
+    db: syncedDb,
+    isSyncing,
+    refreshData,
+    addTask: pbAddTask,
+    toggleTask: pbToggleTask,
+    removeTask: pbRemoveTask,
+    moveTaskToToday: pbMoveTaskToToday,
+    updateDayStats: pbUpdateDayStats,
+    incrementTaskPomodoro: pbIncrementTaskPomodoro,
+  } = usePocketBase();
+
+  // --- Local Database State (for offline/unauthenticated use) ---
+  const [localDb, setLocalDb] = useState<Database>(() => {
     try {
       const saved = localStorage.getItem('retrofocus_db');
       let parsedDb: Database = saved ? JSON.parse(saved) : {};
       
-      // Legacy migration check (if coming from v1)
-      if (Object.keys(parsedDb).length === 0) {
-        const oldTasks = localStorage.getItem('tui-pomodoro-tasks');
-        const oldStats = localStorage.getItem('tui-pomodoro-stats');
-        if (oldTasks || oldStats) {
-          try {
-            // Try to guess date from stats or default to today
-            const statsObj = oldStats ? JSON.parse(oldStats) : { date: todayDate, pomodorosCompleted: 0, totalTimeMinutes: 0 };
-            const tasksObj = oldTasks ? JSON.parse(oldTasks) : [];
-            const dateKey = statsObj.date || todayDate;
-            parsedDb[dateKey] = {
-              date: dateKey,
-              tasks: tasksObj,
-              stats: statsObj
-            };
-          } catch (e) {
-            console.warn("Failed to migrate legacy data", e);
-          }
-        }
-      }
-
-      // Ensure today exists
       if (!parsedDb[todayDate]) {
         parsedDb[todayDate] = {
           date: todayDate,
@@ -57,7 +58,6 @@ const App: React.FC = () => {
       return parsedDb;
     } catch (error) {
       console.error("Critical error loading database:", error);
-      // Return a safe default state to prevent white/black screen of death
       return {
         [todayDate]: {
           date: todayDate,
@@ -68,8 +68,13 @@ const App: React.FC = () => {
     }
   });
 
+  // Use synced DB when authenticated, otherwise use local
+  const db = isAuthenticated ? syncedDb : localDb;
+  const setDb = isAuthenticated ? () => {} : setLocalDb; // Only allow local updates when not authenticated
+
   const [viewDate, setViewDate] = useState<string>(todayDate);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
 
   const [mode, setMode] = useState<TimerMode>(TimerMode.WORK);
   const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.workDuration);
@@ -77,14 +82,16 @@ const App: React.FC = () => {
   
   const lastTickRef = useRef<number | null>(null);
 
-  // --- Persistence ---
+  // --- Persistence (only for local/offline mode) ---
   useEffect(() => {
-    try {
-      localStorage.setItem('retrofocus_db', JSON.stringify(db));
-    } catch (e) {
-      console.error("Failed to save to localStorage", e);
+    if (!isAuthenticated) {
+      try {
+        localStorage.setItem('retrofocus_db', JSON.stringify(localDb));
+      } catch (e) {
+        console.error("Failed to save to localStorage", e);
+      }
     }
-  }, [db]);
+  }, [localDb, isAuthenticated]);
 
   // --- Helpers ---
   const isViewingToday = viewDate === todayDate;
@@ -93,43 +100,60 @@ const App: React.FC = () => {
     tasks: [], 
     stats: { date: viewDate, pomodorosCompleted: 0, totalTimeMinutes: 0 } 
   };
-  const todayData = db[todayDate]; // Always exists due to init
+  const todayData = db[todayDate] || {
+    date: todayDate,
+    tasks: [],
+    stats: { date: todayDate, pomodorosCompleted: 0, totalTimeMinutes: 0 }
+  };
 
   // --- Timer Logic ---
-  const handleTimerComplete = () => {
+  const handleTimerComplete = async () => {
     setIsActive(false);
 
     if (mode === TimerMode.WORK) {
-      // We ONLY update "today's" stats, regardless of viewDate
-      setDb(prev => {
-        const today = prev[todayDate];
-        const newStats = {
-          ...today.stats,
-          pomodorosCompleted: today.stats.pomodorosCompleted + 1,
-          totalTimeMinutes: today.stats.totalTimeMinutes + (DEFAULT_SETTINGS.workDuration / 60)
-        };
-        
-        let newTasks = [...today.tasks];
-        // If active task exists in today's list, increment it
-        if (activeTaskId) {
-          const taskIndex = newTasks.findIndex(t => t.id === activeTaskId);
-          if (taskIndex >= 0) {
-             newTasks[taskIndex] = {
-               ...newTasks[taskIndex],
-               pomodoros: newTasks[taskIndex].pomodoros + 1
-             };
-          }
-        }
+      if (isAuthenticated) {
+        // Update stats via PocketBase
+        const currentStats = todayData.stats;
+        await pbUpdateDayStats(todayDate, {
+          pomodorosCompleted: currentStats.pomodorosCompleted + 1,
+          totalTimeMinutes: currentStats.totalTimeMinutes + (DEFAULT_SETTINGS.workDuration / 60),
+        });
 
-        return {
-          ...prev,
-          [todayDate]: {
-            ...today,
-            stats: newStats,
-            tasks: newTasks
+        // Update task pomodoros if active task
+        if (activeTaskId) {
+          await pbIncrementTaskPomodoro(todayDate, activeTaskId);
+        }
+      } else {
+        // Local update
+        setLocalDb(prev => {
+          const today = prev[todayDate];
+          const newStats = {
+            ...today.stats,
+            pomodorosCompleted: today.stats.pomodorosCompleted + 1,
+            totalTimeMinutes: today.stats.totalTimeMinutes + (DEFAULT_SETTINGS.workDuration / 60)
+          };
+          
+          let newTasks = [...today.tasks];
+          if (activeTaskId) {
+            const taskIndex = newTasks.findIndex(t => t.id === activeTaskId);
+            if (taskIndex >= 0) {
+               newTasks[taskIndex] = {
+                 ...newTasks[taskIndex],
+                 pomodoros: newTasks[taskIndex].pomodoros + 1
+               };
+            }
           }
-        };
-      });
+
+          return {
+            ...prev,
+            [todayDate]: {
+              ...today,
+              stats: newStats,
+              tasks: newTasks
+            }
+          };
+        });
+      }
 
       setMode(TimerMode.SHORT_BREAK);
       setTimeLeft(DEFAULT_SETTINGS.shortBreakDuration);
@@ -170,78 +194,93 @@ const App: React.FC = () => {
 
   // --- Data Handlers ---
 
-  const handleAddTask = (text: string) => {
-    const newTask: Task = {
-      id: generateId(),
-      text,
-      completed: false,
-      pomodoros: 0
-    };
-
-    setDb(prev => ({
-      ...prev,
-      [viewDate]: {
-        ...prev[viewDate],
-        tasks: [...prev[viewDate].tasks, newTask]
+  const handleAddTask = async (text: string) => {
+    if (isAuthenticated) {
+      const newTask = await pbAddTask(viewDate, text);
+      if (newTask && isViewingToday && !activeTaskId) {
+        setActiveTaskId(newTask.id);
       }
-    }));
+    } else {
+      const newTask: Task = {
+        id: generateId(),
+        text,
+        completed: false,
+        pomodoros: 0
+      };
 
-    if (isViewingToday && !activeTaskId) setActiveTaskId(newTask.id);
+      setLocalDb(prev => ({
+        ...prev,
+        [viewDate]: {
+          ...prev[viewDate],
+          tasks: [...prev[viewDate].tasks, newTask]
+        }
+      }));
+
+      if (isViewingToday && !activeTaskId) setActiveTaskId(newTask.id);
+    }
   };
 
-  const handleToggleTask = (id: string) => {
-    setDb(prev => ({
-      ...prev,
-      [viewDate]: {
-        ...prev[viewDate],
-        tasks: prev[viewDate].tasks.map(t => 
-          t.id === id ? { ...t, completed: !t.completed } : t
-        )
-      }
-    }));
+  const handleToggleTask = async (id: string) => {
+    if (isAuthenticated) {
+      await pbToggleTask(viewDate, id);
+    } else {
+      setLocalDb(prev => ({
+        ...prev,
+        [viewDate]: {
+          ...prev[viewDate],
+          tasks: prev[viewDate].tasks.map(t => 
+            t.id === id ? { ...t, completed: !t.completed } : t
+          )
+        }
+      }));
+    }
   };
 
-  const handleDeleteTask = (id: string) => {
-    setDb(prev => ({
-      ...prev,
-      [viewDate]: {
-        ...prev[viewDate],
-        tasks: prev[viewDate].tasks.filter(t => t.id !== id)
-      }
-    }));
+  const handleDeleteTask = async (id: string) => {
+    if (isAuthenticated) {
+      await pbRemoveTask(viewDate, id);
+    } else {
+      setLocalDb(prev => ({
+        ...prev,
+        [viewDate]: {
+          ...prev[viewDate],
+          tasks: prev[viewDate].tasks.filter(t => t.id !== id)
+        }
+      }));
+    }
     if (activeTaskId === id && isViewingToday) setActiveTaskId(null);
   };
 
   const handleSelectTask = (id: string) => {
-    // Can only select active tasks if viewing today
     if (isViewingToday) {
       setActiveTaskId(id);
     }
   };
 
-  const handleMigrateTask = (task: Task) => {
-    // Create new task copy for today
-    const migratedTask: Task = {
-      ...task,
-      id: generateId(), // New ID to prevent conflicts
-      pomodoros: 0 // Reset pomodoros for the new day
-    };
-
-    setDb(prev => {
-      // Remove from old date
-      const oldDay = prev[viewDate];
-      const oldTasks = oldDay.tasks.filter(t => t.id !== task.id);
-      
-      // Add to today
-      const today = prev[todayDate];
-      const todayTasks = [...today.tasks, migratedTask];
-
-      return {
-        ...prev,
-        [viewDate]: { ...oldDay, tasks: oldTasks },
-        [todayDate]: { ...today, tasks: todayTasks }
+  const handleMigrateTask = async (task: Task) => {
+    if (isAuthenticated) {
+      await pbMoveTaskToToday(viewDate, task);
+    } else {
+      const migratedTask: Task = {
+        ...task,
+        id: generateId(),
+        pomodoros: 0
       };
-    });
+
+      setLocalDb(prev => {
+        const oldDay = prev[viewDate];
+        const oldTasks = oldDay.tasks.filter(t => t.id !== task.id);
+        
+        const today = prev[todayDate];
+        const todayTasks = [...today.tasks, migratedTask];
+
+        return {
+          ...prev,
+          [viewDate]: { ...oldDay, tasks: oldTasks },
+          [todayDate]: { ...today, tasks: todayTasks }
+        };
+      });
+    }
   };
 
   const handleExport = () => {
@@ -270,6 +309,17 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen p-4 md:p-8 flex flex-col max-w-6xl mx-auto">
       
+      {/* Auth Modal */}
+      {showAuthModal && (
+        <AuthModal
+          onLogin={login}
+          onRegister={register}
+          onClose={() => setShowAuthModal(false)}
+          error={authError}
+          isLoading={authLoading}
+        />
+      )}
+      
       {/* Header */}
       <header className="mb-6 md:mb-8 text-center select-none">
         <div className="hidden md:block">
@@ -280,7 +330,13 @@ const App: React.FC = () => {
         <div className="mt-2 text-green-800 text-sm tracking-[0.5em] flex justify-between items-center px-4 border-b-2 border-green-900 pb-2">
            <span className="hidden md:inline">SYSTEM_READY // V2.0.0</span>
            <span className="text-green-500 font-bold">DATE_LOADED: {viewDate}</span>
-           <span className="hidden md:inline">DB_STATUS: ONLINE</span>
+           <SyncStatus
+             isAuthenticated={isAuthenticated}
+             isSyncing={isSyncing}
+             userEmail={user?.email}
+             onLoginClick={() => setShowAuthModal(true)}
+             onLogout={logout}
+           />
         </div>
         
         {/* Mobile Header Title */}
@@ -374,7 +430,7 @@ const App: React.FC = () => {
       </div>
       
       <footer className="mt-12 text-center text-green-900 text-xs pb-4">
-        <p>RETROFOCUS TUI // LOCAL_STORAGE_DB // V2</p>
+        <p>RETROFOCUS TUI // {isAuthenticated ? 'POCKETBASE_SYNC' : 'LOCAL_STORAGE_DB'} // V2</p>
       </footer>
     </div>
   );

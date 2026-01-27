@@ -19,9 +19,48 @@ View your app in AI Studio: https://ai.studio/apps/drive/1lRe1OfRw-MI2oDuLGb5gYu
 3. Run the app:
    `npm run dev`
 
+## Multi-Device Sync with PocketBase
+
+RetroFocus supports syncing your data across multiple devices using [PocketBase](https://pocketbase.io/).
+
+### Quick Start
+
+1. **Start PocketBase server:**
+   ```bash
+   pocketbase serve
+   ```
+
+2. **Set up admin account:**
+   - Open http://127.0.0.1:8090/_/
+   - Create your admin account
+
+3. **Import the schema:**
+   - Go to Settings → Import Collections
+   - Import `pb_schema.json` from this project
+
+4. **Start the app:**
+   ```bash
+   npm run dev
+   ```
+
+5. **Register/Login in the app:**
+   - Click "SYNC: OFFLINE" in the header
+   - Create an account or login
+   - Your data will now sync across devices!
+
+### Deploying PocketBase
+
+For production use, deploy PocketBase to a server:
+
+- **Fly.io**: https://github.com/pocketbase/pocketbase/discussions/537
+- **Railway**: One-click deploy available
+- **Self-hosted**: Run the binary on any Linux server
+
+Update `VITE_POCKETBASE_URL` in your environment to point to your deployed instance.
+
 ## Nix Development Environment
 
-If you use [Nix](https://nixos.org/), this project includes a `flake.nix` for a reproducible development environment.
+If you use [Nix](https://nixos.org/), this project includes a `flake.nix` for a reproducible development environment with PocketBase included.
 
 **Prerequisites:** Nix with flakes enabled
 
@@ -44,9 +83,14 @@ experimental-features = nix-command flakes
    npm install
    ```
 
-3. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Start PocketBase (in a separate terminal):
+   ```bash
+   pocketbase serve
+   ```
 
-4. Run the app:
+4. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+
+5. Run the app:
    ```bash
    npm run dev
    ```
